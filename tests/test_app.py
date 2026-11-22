@@ -7,16 +7,24 @@ from __future__ import annotations
 
 import io
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app  # noqa: E402
 from app.ledger import LedgerError, import_ledger, parse_ledger  # noqa: E402
 from app.solver import MAX_LIBRARIES, SolveError, same_table, solve  # noqa: E402
-from app.storage import connect, fetch_sources, init_db  # noqa: E402
+from app.storage import (  # noqa: E402
+    connect,
+    fetch_sources,
+    get_draft_any_state,
+    init_db,
+)
 
 CSV_HEADER = "image_sha256,library_no,status,credit,summary\n"
 
@@ -233,8 +241,10 @@ class WebFlowTests(unittest.TestCase):
         self.assertIn("核对一致".encode(), detail.data)
         # 原署名保留
         self.assertIn("甲馆-甲署名".encode(), detail.data)
-        # 草稿已删除
-        self.assertEqual(self.client.get(f"/result/{token}").status_code, 404)
+        # 草稿已存档：访问草稿链接重定向到对应署名表，而不是再给一份可确认的草稿
+        gone = self.client.get(f"/result/{token}")
+        self.assertEqual(gone.status_code, 302)
+        self.assertIn("/tables/1", gone.headers["Location"])
 
     def test_missing_source_shows_images_and_no_table(self):
         resp = self._solve(["imgA", "imgF"])
@@ -303,6 +313,199 @@ class WebFlowTests(unittest.TestCase):
     def test_no_selection_flashes_error(self):
         page = self.client.post("/solve", data={}, follow_redirects=True)
         self.assertIn("未勾选".encode(), page.data)
+
+    # ---------- 本次修复新增场景 ----------
+
+    def test_duplicate_confirm_same_draft_archives_once(self):
+        """两个窗口先后确认同一草稿：只存档一份，第二次直接导向已存档表。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        first = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertEqual(first.status_code, 302)
+        self.assertIn("/tables/1", first.headers["Location"])
+        # 第二次确认：不产生 #2，重定向到同一份表并提示
+        second = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertEqual(second.status_code, 302)
+        self.assertIn("/tables/1", second.headers["Location"])
+        page = client.get("/tables", follow_redirects=True)
+        self.assertNotIn("#2".encode(), page.data)
+        # 直接核验库内只有一份确认表、草稿为 archived 且指向 #1
+        conn = connect(self.tmp.name)
+        n_tables = conn.execute("SELECT COUNT(*) AS n FROM confirmed_tables").fetchone()["n"]
+        self.assertEqual(n_tables, 1)
+        d = get_draft_any_state(conn, token)
+        self.assertEqual(d["status"], "archived")
+        self.assertEqual(d["confirmed_id"], 1)
+        conn.close()
+
+    def test_concurrent_confirm_requests_archive_once(self):
+        """真正并发：两个线程同时确认，写锁串行化后仍只有一份存档。"""
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        outcomes = []
+
+        def worker():
+            client = self.app.test_client()
+            resp = client.post(f"/confirm/{token}", follow_redirects=False)
+            outcomes.append((resp.status_code, resp.headers.get("Location", "")))
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start(); t1.join(); t2.join()
+
+        self.assertEqual(len(outcomes), 2)
+        # 两个请求都应 302（成功跳转或"确认中/已存档"提示），没有 500
+        self.assertTrue(all(code == 302 for code, _ in outcomes), outcomes)
+        conn = connect(self.tmp.name)
+        self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM confirmed_tables").fetchone()["n"], 1)
+        status = get_draft_any_state(conn, token)["status"]
+        self.assertEqual(status, "archived")
+        conn.close()
+
+    def test_drift_then_correction_restores_same_table_and_confirms(self):
+        """漂移后继续补正：现行台账重新得出同一份表时，原草稿可以确认。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        # 补正导致漂移：改 imgC/L03 署名
+        self._upload([("imgC", "L03", "approved", "丙馆-署名已更正", "经卷")])
+        self.assertEqual(client.post(f"/confirm/{token}").status_code, 200)  # 重算页，不保存
+        # 再补正回原署名 → 现行台账又能得出同一份表
+        self._upload([("imgC", "L03", "approved", "丙馆-丙署名", "经卷")])
+        page = client.get(f"/result/{token}")
+        self.assertNotIn("台账已漂移".encode(), page.data)
+        resp = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/tables/1", resp.headers["Location"])
+
+    def test_drift_confirm_keeps_draft_for_retry(self):
+        """结果有变：拒绝保存、提示重算，草稿仍在且状态回到 draft。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        # 改 imgC/L03 署名 → 同馆同图署名变化，按规则不再是同一份表
+        self._upload([("imgC", "L03", "approved", "丙馆-署名已更正", "经卷")])
+        rejected = client.post(f"/confirm/{token}")
+        self.assertIn("确认被拒绝".encode(), rejected.data)
+        self.assertIn("草稿已保留".encode(), rejected.data)
+        # 草稿仍可打开
+        self.assertEqual(client.get(f"/result/{token}").status_code, 200)
+        conn = connect(self.tmp.name)
+        self.assertEqual(get_draft_any_state(conn, token)["status"], "draft")
+        self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM confirmed_tables").fetchone()["n"], 0)
+        conn.close()
+
+    def test_confirm_write_failure_keeps_draft(self):
+        """存档写入失败时事务回滚：草稿保留为 draft，页面提示可重试。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        with mock.patch("app.save_confirmed", side_effect=sqlite3.OperationalError("disk I/O error")):
+            resp = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(f"/result/{token}", resp.headers["Location"])
+        # 跟着跳转看到失败提示
+        page = client.get(f"/result/{token}", follow_redirects=True)
+        self.assertIn("存档写入失败".encode(), page.data)
+        self.assertIn("草稿已保留".encode(), page.data)
+        # 库内无确认表，草稿仍可再次确认
+        conn = connect(self.tmp.name)
+        self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM confirmed_tables").fetchone()["n"], 0)
+        self.assertEqual(get_draft_any_state(conn, token)["status"], "draft")
+        conn.close()
+        # 恢复后重试成功
+        ok = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertIn("/tables/1", ok.headers["Location"])
+
+    def test_csv_correction_during_recompute_still_imports(self):
+        """重算馆组合期间 CSV 补正照常入库（与确认写锁互斥但不互相吞数据）。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        # 先制造漂移：改 imgC/L03 署名
+        self._upload([("imgC", "L03", "approved", "丙馆-署名已更正", "经卷")])
+        self.assertEqual(client.post(f"/confirm/{token}").status_code, 200)
+        # 在重算/保留草稿期间继续补正：撤回再恢复一条，upsert 均成功
+        self._upload([
+            ("imgB", "L02", "revoked", "乙馆-撤回", "壁画"),
+        ])
+        self._upload([
+            ("imgB", "L02", "approved", "乙馆-乙署名", "壁画"),
+        ])
+        conn = connect(self.tmp.name)
+        rows = {r["library_no"]: r["status"] for r in fetch_sources(conn, ["imgB"])["imgB"]}
+        self.assertEqual(rows["L02"], "approved")
+        # 草稿依然存在且可重试
+        self.assertEqual(get_draft_any_state(conn, token)["status"], "draft")
+        conn.close()
+
+    def test_archived_draft_cannot_be_discarded(self):
+        client = self.app.test_client()
+        token = self._solve(["imgD"]).headers["Location"].rsplit("/", 1)[-1]
+        client.post(f"/confirm/{token}")
+        resp = client.post(f"/draft/{token}/discard", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/tables/1", resp.headers["Location"])
+        conn = connect(self.tmp.name)
+        self.assertEqual(get_draft_any_state(conn, token)["status"], "archived")
+        conn.close()
+
+    def test_stale_confirming_draft_self_heals_and_confirms(self):
+        """进程崩溃残留的 confirming 草稿：再次确认时自愈为 draft 并正常存档。"""
+        client = self.app.test_client()
+        token = self._solve(["imgA", "imgB", "imgC"]).headers["Location"].rsplit("/", 1)[-1]
+        conn = connect(self.tmp.name)
+        conn.execute("UPDATE drafts SET status='confirming' WHERE token=?", (token,))
+        conn.commit()
+        conn.close()
+        # 重新确认：自愈后应成功存档，且只有一份表
+        resp = client.post(f"/confirm/{token}", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/tables/1", resp.headers["Location"])
+        conn = connect(self.tmp.name)
+        self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM confirmed_tables").fetchone()["n"], 1)
+        self.assertEqual(get_draft_any_state(conn, token)["status"], "archived")
+        conn.close()
+
+
+class DraftSchemaMigrationTests(unittest.TestCase):
+    """旧版 drafts 表（无 status/confirmed_id 列）打开后应自动迁移。"""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        conn = sqlite3.connect(self.tmp.name)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, image_sha256 TEXT NOT NULL,
+                library_no TEXT NOT NULL, status TEXT NOT NULL, credit TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL,
+                UNIQUE (image_sha256, library_no));
+            CREATE TABLE confirmed_tables (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, confirmed_at REAL NOT NULL,
+                image_count INTEGER NOT NULL, libraries TEXT NOT NULL, payload_json TEXT NOT NULL);
+            CREATE TABLE drafts (
+                token TEXT PRIMARY KEY, created_at REAL NOT NULL,
+                hashes_json TEXT NOT NULL, result_json TEXT NOT NULL);
+            INSERT INTO drafts (token, created_at, hashes_json, result_json)
+            VALUES ('oldtoken', strftime('%s', 'now'), '[]', '{}');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+
+    def test_migration_adds_status_columns_and_keeps_rows(self):
+        app = create_app(db_path=self.tmp.name)
+        client = app.test_client()
+        # 触发一次建库/迁移
+        self.assertEqual(client.get("/").status_code, 200)
+        conn = connect(self.tmp.name)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(drafts)").fetchall()}
+        self.assertIn("status", cols)
+        self.assertIn("confirmed_id", cols)
+        row = get_draft_any_state(conn, "oldtoken")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "draft")  # 旧草稿默认仍可用
+        conn.close()
 
 
 if __name__ == "__main__":

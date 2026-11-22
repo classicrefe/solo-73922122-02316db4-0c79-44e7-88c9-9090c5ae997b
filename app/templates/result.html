@@ -5,8 +5,17 @@
   {% if drift is not none %}
     <div class="flash error">
       <strong>台账已漂移：</strong>搜索之后台账发生过补正，当前草稿与现行台账不一致。
-      直接确认将被拒绝，请<a href="#diffs">查看差异</a>后放弃草稿并重新搜索。
+      <a href="#diffs">查看差异</a>。直接点确认会被拒绝并进入重算页，<strong>草稿会保留</strong>；
+      您可以继续补正台账，待现行台账重新得出同一份表后再确认，或放弃草稿重新搜索。
     </div>
+    <section class="panel" style="margin-bottom:16px; padding:14px 18px;">
+      <h2 style="font-size:15px;">在此补正台账 CSV（不离开草稿页）</h2>
+      <form method="post" action="{{ url_for('upload_ledger') }}" enctype="multipart/form-data" class="toolbar">
+        <input type="file" name="ledger" accept=".csv,text/csv" required>
+        <button class="btn" type="submit">导入并补正台账</button>
+        <a class="btn secondary" href="#diffs">查看当前差异</a>
+      </form>
+    </section>
   {% endif %}
   <p>
     共 {{ result.entries | length }} 张图，使用馆
@@ -55,8 +64,8 @@
 
   <div class="toolbar">
     <form class="inline" method="post" action="{{ url_for('confirm', token=token) }}">
-      <button class="btn" type="submit" {% if drift is not none %}disabled title="台账已漂移，请重新搜索"{% endif %}>
-        确认并保存（将再次复核现行台账）
+      <button class="btn" type="submit" {% if drift is not none %}title="当前与现行台账不一致，确认将被拒绝并提示重算"{% endif %}>
+        确认并保存（存档时将再次复核现行台账）
       </button>
     </form>
     <form class="inline" method="post" action="{{ url_for('discard_draft', token=token) }}">
@@ -64,6 +73,10 @@
     </form>
     <a class="btn secondary" href="{{ url_for('index') }}">继续补正台账</a>
   </div>
-  <p class="muted small">确认时若现行台账已不能得出同一份表，系统会拒绝保存并提示重算；草稿保留 24 小时。</p>
+  <p class="muted small">
+    确认以存档生效时的台账为准，按图序、馆号、署名逐图比对：仍能得出同一份表才会存档；
+    结果有变则拒绝保存并提示重算，草稿保留可重试。一份草稿只会存档一次，重复确认不会产生第二份表。
+    草稿保留 24 小时。
+  </p>
 </section>
 {% endblock %}

@@ -2,7 +2,7 @@
 {% block content %}
 <section class="panel">
   <h2>确认被拒绝：台账已变化，请重算</h2>
-  <p>搜索时使用的台账与现行台账不再能得出同一份表，本次<strong>不保存</strong>。差异如下：</p>
+  <p>搜索时使用的台账与现行台账不再能得出同一份表，本次<strong>不保存</strong>，<strong>草稿已保留</strong>。差异如下：</p>
   <table>
     <thead><tr><th>图像 SHA-256</th><th>差异类型</th><th>说明</th></tr></thead>
     <tbody>
@@ -38,12 +38,22 @@
      <span class="mono">{{ current.missing | join(', ') }}</span></p>
   {% endif %}
 
+  <section class="panel" style="margin:18px 0; padding:14px 18px;">
+    <h2 style="font-size:15px;">补正台账后回到草稿重试（无需重新搜索）</h2>
+    <form method="post" action="{{ url_for('upload_ledger') }}" enctype="multipart/form-data" class="toolbar">
+      <input type="file" name="ledger" accept=".csv,text/csv" required>
+      <button class="btn" type="submit">导入并补正台账</button>
+    </form>
+    <p class="muted small">补正后若现行台账重新得出与草稿同一份表（图序、馆号、署名一致），回到草稿页即可确认成功。</p>
+  </section>
+
   <div class="toolbar">
+    <a class="btn" href="{{ url_for('show_result', token=token) }}">← 返回草稿页（重试确认）</a>
     <form class="inline" method="post" action="{{ url_for('discard_draft', token=token) }}">
       <button class="btn danger" type="submit">放弃旧草稿</button>
     </form>
-    <a class="btn" href="{{ url_for('select_images') }}">重新选图搜索</a>
-    <a class="btn secondary" href="{{ url_for('index') }}">去补正台账</a>
+    <a class="btn secondary" href="{{ url_for('select_images') }}">重新选图搜索</a>
+    <a class="btn secondary" href="{{ url_for('index') }}">去台账总览</a>
   </div>
 </section>
 {% endblock %}

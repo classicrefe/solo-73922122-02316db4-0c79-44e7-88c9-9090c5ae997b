@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from flask import (
@@ -21,12 +22,17 @@ from .recheck import diff_results, recheck_confirmed
 from .solver import MAX_IMAGES, SolveError, same_table, solve
 from .storage import (
     all_images,
+    claim_draft_for_confirm,
     delete_draft,
     fetch_sources,
     get_confirmed,
     get_draft,
+    get_draft_any_state,
+    immediate_session,
     list_confirmed,
+    mark_draft_archived,
     prune_drafts,
+    release_draft_claim,
     save_confirmed,
     save_draft,
     session,
@@ -73,11 +79,16 @@ def create_app(db_path: str | None = None) -> Flask:
             return redirect(url_for("index"))
         try:
             raw = file.read()
-            with db() as conn:
+            # 台账补正走立即写锁，与确认存档互斥：
+            # 重算馆组合期间 CSV 补正仍可入库，但不会插进"复核→存档"的原子窗口。
+            with immediate_session(app.config.get("DB_PATH")) as conn:
                 report = import_ledger(conn, raw)
         except LedgerError as exc:
             flash(f"台账导入失败：{exc}", "error")
             return redirect(url_for("index"))
+        except sqlite3.Error as exc:
+            flash(f"台账写入失败，数据未入库，请重试：{exc}", "error")
+            return redirect(request.referrer or url_for("index"))
         flash(
             f"台账已补正：{report['total']} 条（准用 {report['approved']}、撤回 {report['revoked']}），"
             "同一 (图像, 馆号) 的旧记录已被更正。",
@@ -135,10 +146,14 @@ def create_app(db_path: str | None = None) -> Flask:
         with db() as conn:
             draft = get_draft(conn, token)
             if draft is None:
+                # 已存档的草稿：直接转到对应署名表，而不是 404
+                any_state = get_draft_any_state(conn, token)
+                if any_state is not None and any_state["status"] == "archived":
+                    return redirect(url_for("show_table", table_id=any_state["confirmed_id"]))
                 abort(404)
             result = json.loads(draft["result_json"])
             hashes = json.loads(draft["hashes_json"])
-            # 实时对照现行台账，提示是否已漂移
+            # 实时对照现行台账，提示是否已漂移（仅提示；最终以确认时锁内复核为准）
             sources = fetch_sources(conn, hashes)
             current = solve(hashes, sources)
             drift = None if same_table(result, current) else diff_results(result, current)
@@ -149,32 +164,67 @@ def create_app(db_path: str | None = None) -> Flask:
             drift=drift,
         )
 
-    # ---------- 确认（现行台账须仍能得出同一份表） ----------
+    # ---------- 确认（现行台账须仍能得出同一份表；一份草稿最多存档一次） ----------
     @app.route("/confirm/<token>", methods=["POST"])
     def confirm(token: str):
-        with db() as conn:
-            draft = get_draft(conn, token)
-            if draft is None:
-                abort(404)
-            snapshot = json.loads(draft["result_json"])
-            hashes = json.loads(draft["hashes_json"])
-            current = solve(hashes, fetch_sources(conn, hashes))
-            if not same_table(snapshot, current):
-                diffs = diff_results(snapshot, current)
-                return render_template(
-                    "recompute.html",
-                    token=token,
-                    diffs=diffs,
-                    current=current,
-                )
-            table_id = save_confirmed(conn, snapshot)
-            delete_draft(conn, token)
-        flash(f"署名表 #{table_id} 已确认保存（现行台账复核一致）。", "success")
+        try:
+            # BEGIN IMMEDIATE：整个"认领→复核→存档"持有写锁，
+            # 台账补正与其它确认请求只能在锁外排队，杜绝双窗口重复存档与旧表入档。
+            with immediate_session(app.config.get("DB_PATH")) as conn:
+                draft_row = get_draft_any_state(conn, token)
+                if draft_row is None:
+                    abort(404)
+                if draft_row["status"] == "archived":
+                    # 另一个窗口已确认成功：直接导向已存档的同一份表，不再重复入档
+                    table_id = draft_row["confirmed_id"]
+                    flash("该草稿已在另一窗口确认存档，无需重复确认。", "success")
+                    return redirect(url_for("show_table", table_id=table_id))
+                if draft_row["status"] == "confirming":
+                    # 自愈：上次确认进程中途崩溃才会残留 confirming
+                    # （其事务已随进程死亡回滚，存档不可能已写入），转回 draft 重新认领
+                    release_draft_claim(conn, token)
+                # 原子认领：并发的第二个确认请求会在这里拿到 None
+                draft = claim_draft_for_confirm(conn, token)
+                if draft is None:
+                    # 另一窗口正在确认中：不重复存档，提示稍后查看
+                    flash("该草稿正在另一窗口确认中，请稍后在已确认表查询结果，请勿重复提交。", "error")
+                    return redirect(url_for("show_result", token=token))
+
+                snapshot = json.loads(draft["result_json"])
+                hashes = json.loads(draft["hashes_json"])
+                # 以存档生效时的现行台账为准重算（锁内无补正可插入）
+                current = solve(hashes, fetch_sources(conn, hashes))
+                if not same_table(snapshot, current):
+                    # 结果有变：释放认领、保留草稿，提示重算
+                    release_draft_claim(conn, token)
+                    diffs = diff_results(snapshot, current)
+                    return render_template(
+                        "recompute.html",
+                        token=token,
+                        diffs=diffs,
+                        current=current,
+                    )
+                # 复核一致才存档；写入失败会抛异常 → 事务回滚 → 认领释放、草稿原样保留
+                table_id = save_confirmed(conn, snapshot)
+                mark_draft_archived(conn, token, table_id)
+        except sqlite3.Error as exc:
+            # 写入失败：整个事务已回滚，草稿仍为 draft，明确告知可重试
+            app.logger.exception("confirm failed for draft %s", token)
+            flash(f"存档写入失败，草稿已保留，请稍后重试确认：{exc}", "error")
+            return redirect(url_for("show_result", token=token))
+        flash(f"署名表 #{table_id} 已确认保存（存档时现行台账复核一致）。", "success")
         return redirect(url_for("show_table", table_id=table_id))
 
     @app.route("/draft/<token>/discard", methods=["POST"])
     def discard_draft(token: str):
-        with db() as conn:
+        with immediate_session(app.config.get("DB_PATH")) as conn:
+            draft = get_draft_any_state(conn, token)
+            if draft is None:
+                abort(404)
+            if draft["status"] == "archived":
+                flash("该草稿已确认存档，不能放弃。", "error")
+                return redirect(url_for("show_table", table_id=draft["confirmed_id"]))
+            # 确认中的草稿由确认事务持有写锁，走到这里时必然已是 draft/archived
             delete_draft(conn, token)
         flash("草稿已放弃。", "success")
         return redirect(url_for("select_images"))
