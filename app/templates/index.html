@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="cards">
+  <div class="card"><div class="num">{{ stats.images }}</div><div class="label">台账图片数（不同 SHA-256）</div></div>
+  <div class="card"><div class="num">{{ stats.rows }}</div><div class="label">台账记录条数</div></div>
+  <div class="card"><div class="num">{{ stats.approved }}</div><div class="label">准用记录条数</div></div>
+  <div class="card"><div class="num">{{ stats.tables }}</div><div class="label">已确认署名表</div></div>
+</div>
+
+<section class="panel">
+  <h2>上传来源台账 CSV（增补 / 更正）</h2>
+  <p class="muted small">
+    表头需含：image_sha256、library_no、status、credit、summary（亦支持中文表头：图像sha256、馆号、准用状态、署名、摘要）。
+    状态取值 <span class="mono">approved/revoked</span> 或 <span class="mono">准用/撤回</span>。
+    同一 <span class="mono">(图像 SHA-256, 馆号)</span> 的旧记录会被更正；搜索组合期间可随时继续上传补正。
+  </p>
+  <form method="post" action="{{ url_for('upload_ledger') }}" enctype="multipart/form-data" class="toolbar">
+    <input type="file" name="ledger" accept=".csv,text/csv" required>
+    <button class="btn" type="submit">导入并补正台账</button>
+    <a class="btn secondary" href="{{ url_for('select_images') }}">去选图出表 →</a>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>已确认署名表</h2>
+  {% if confirmed %}
+  <table>
+    <thead><tr><th>表号</th><th>确认时间</th><th>图片数</th><th>用到馆号（升序）</th><th></th></tr></thead>
+    <tbody>
+    {% for t in confirmed %}
+      <tr>
+        <td>#{{ t.id }}</td>
+        <td>{{ t.confirmed_at | as_dt }}</td>
+        <td>{{ t.image_count }}</td>
+        <td class="mono">{{ t.libraries | join(', ') }}</td>
+        <td><a class="btn secondary" href="{{ url_for('show_table', table_id=t.id) }}">查看 / 核对</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">尚无已确认署名表。</p>
+  {% endif %}
+</section>
+{% endblock %}

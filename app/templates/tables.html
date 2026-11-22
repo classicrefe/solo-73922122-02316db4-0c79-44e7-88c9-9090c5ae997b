@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>已确认署名表查询</h2>
+  {% if tables %}
+  <table>
+    <thead><tr><th>表号</th><th>图片数</th><th>馆数</th><th>用到馆号（升序）</th><th>核对状态</th><th></th></tr></thead>
+    <tbody>
+    {% for t in tables %}
+      <tr>
+        <td>#{{ t.id }}</td>
+        <td>{{ t.image_count }}</td>
+        <td>{{ t.payload.library_count }}</td>
+        <td class="mono">{{ t.libraries | join(', ') }}</td>
+        <td><a class="btn secondary" href="{{ url_for('show_table', table_id=t.id) }}">打开核对</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">尚无已确认署名表。</p>
+  {% endif %}
+</section>
+{% endblock %}

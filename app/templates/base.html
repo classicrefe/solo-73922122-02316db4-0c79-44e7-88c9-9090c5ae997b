@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}逐图署名复核{% endblock %}</title>
+  <style>
+    :root { --ink:#1f2933; --muted:#6b7280; --line:#d7dde3; --accent:#1d4ed8;
+            --ok-bg:#ecfdf5; --warn-bg:#fffbeb; --err-bg:#fef2f2; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif;
+           color:var(--ink); background:#f6f8fa; line-height:1.55; }
+    header { background:#0f2a4a; color:#fff; padding:14px 28px; display:flex;
+             align-items:baseline; gap:24px; flex-wrap:wrap; }
+    header h1 { font-size:19px; margin:0; }
+    header nav a { color:#cfe0f5; text-decoration:none; margin-right:18px; font-size:14px; }
+    header nav a:hover { color:#fff; text-decoration:underline; }
+    main { max-width:1180px; margin:24px auto; padding:0 20px 60px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; margin-bottom:26px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; }
+    .card .num { font-size:26px; font-weight:700; }
+    .card .label { color:var(--muted); font-size:13px; }
+    section.panel { background:#fff; border:1px solid var(--line); border-radius:10px;
+                    padding:20px 22px; margin-bottom:22px; }
+    h2 { font-size:17px; margin:0 0 14px; }
+    table { border-collapse:collapse; width:100%; font-size:13.5px; }
+    th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+    th { background:#f1f5f9; font-weight:600; white-space:nowrap; }
+    td.mono, .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; word-break:break-all; }
+    .muted { color:var(--muted); }
+    .btn { display:inline-block; background:var(--accent); color:#fff; border:0; border-radius:7px;
+           padding:9px 20px; font-size:14px; cursor:pointer; text-decoration:none; }
+    .btn.secondary { background:#475569; }
+    .btn.danger { background:#b91c1c; }
+    .btn:disabled { background:#9ca3af; cursor:not-allowed; }
+    .flash { border-radius:8px; padding:11px 16px; margin-bottom:16px; font-size:14px; }
+    .flash.success { background:var(--ok-bg); border:1px solid #a7f3d0; }
+    .flash.error { background:var(--err-bg); border:1px solid #fecaca; }
+    .badge { display:inline-block; border-radius:999px; padding:2px 10px; font-size:12px; white-space:nowrap; }
+    .badge.warn { background:#fde68a; color:#92400e; }
+    .badge.err  { background:#fecaca; color:#991b1b; }
+    .badge.ok   { background:#bbf7d0; color:#166534; }
+    .badge.grey { background:#e5e7eb; color:#374151; }
+    .row-warn { background:var(--warn-bg); }
+    .row-err  { background:var(--err-bg); }
+    form.inline { display:inline; }
+    .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:14px 0; }
+    .lib-tags span { display:inline-block; background:#eef2ff; border:1px solid #c7d2fe;
+                     border-radius:6px; padding:2px 9px; margin:0 6px 6px 0; font-size:12.5px; }
+    input[type=file] { font-size:14px; }
+    .sticky-foot { position:sticky; bottom:0; background:#f6f8facc; backdrop-filter:blur(4px);
+                   padding:12px 0; border-top:1px solid var(--line); margin-top:16px; }
+    .sel-count { font-weight:600; color:var(--accent); }
+    .small { font-size:12.5px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>展览图录 · 逐图署名复核</h1>
+  <nav>
+    <a href="{{ url_for('index') }}">台账总览</a>
+    <a href="{{ url_for('select_images') }}">选图出表</a>
+    <a href="{{ url_for('tables_index') }}">已确认表查询</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

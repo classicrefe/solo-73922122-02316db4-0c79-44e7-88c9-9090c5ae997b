@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>确认被拒绝：台账已变化，请重算</h2>
+  <p>搜索时使用的台账与现行台账不再能得出同一份表，本次<strong>不保存</strong>。差异如下：</p>
+  <table>
+    <thead><tr><th>图像 SHA-256</th><th>差异类型</th><th>说明</th></tr></thead>
+    <tbody>
+    {% for d in diffs %}
+      <tr class="row-err">
+        <td class="mono">{{ d.image_sha256 }}</td>
+        <td>
+          {% if d.kind == 'missing' %}<span class="badge err">无准用来源</span>
+          {% elif d.kind == 'library' %}<span class="badge warn">馆号变化</span>
+          {% else %}<span class="badge warn">署名变化</span>{% endif %}
+        </td>
+        <td>{{ d.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if current.feasible %}
+  <h2 style="margin-top:22px">按现行台账重算后的表（馆数 {{ current.library_count }}）</h2>
+  <p class="lib-tags">入选馆号：{% for lib in current.libraries %}<span class="mono">{{ lib }}</span>{% endfor %}</p>
+  <table>
+    <thead><tr><th>#</th><th>摘要</th><th>图像 SHA-256</th><th>馆号</th><th>署名</th></tr></thead>
+    <tbody>
+    {% for e in current.entries %}
+      <tr><td>{{ loop.index }}</td><td>{{ e.summary or '—' }}</td>
+          <td class="mono">{{ e.image_sha256 }}</td><td class="mono">{{ e.library_no }}</td>
+          <td>{{ e.credit or '—' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="flash error">现行台账下有图片已无准用来源，无法成表：
+     <span class="mono">{{ current.missing | join(', ') }}</span></p>
+  {% endif %}
+
+  <div class="toolbar">
+    <form class="inline" method="post" action="{{ url_for('discard_draft', token=token) }}">
+      <button class="btn danger" type="submit">放弃旧草稿</button>
+    </form>
+    <a class="btn" href="{{ url_for('select_images') }}">重新选图搜索</a>
+    <a class="btn secondary" href="{{ url_for('index') }}">去补正台账</a>
+  </div>
+</section>
+{% endblock %}

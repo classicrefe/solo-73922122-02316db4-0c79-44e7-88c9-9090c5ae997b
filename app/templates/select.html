@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>勾选本次出图（至多 {{ max_images }} 张；涉及准用馆不超过 16 家）</h2>
+  {% if not images %}
+    <p class="muted">台账中还没有图片，请先在<a href="{{ url_for('index') }}">台账总览</a>上传来源台账 CSV。</p>
+  {% else %}
+  <form method="post" action="{{ url_for('do_solve') }}" id="selForm">
+    <div class="toolbar">
+      <button type="button" class="btn secondary" id="toggleAll">全选 / 全不选</button>
+      <span>已选 <span class="sel-count" id="counter">0</span> / {{ max_images }} 张</span>
+    </div>
+    <table>
+      <thead>
+        <tr><th style="width:36px">选</th><th>图像 SHA-256</th><th>摘要</th><th>来源馆数</th><th>准用馆号</th></tr>
+      </thead>
+      <tbody>
+      {% for img in images %}
+        <tr>
+          <td><input type="checkbox" name="selected" value="{{ img.image_sha256 }}" class="pic-check"></td>
+          <td class="mono">{{ img.image_sha256 }}</td>
+          <td>{{ img.summary or '—' }}</td>
+          <td>{{ img.source_count }}（准用 {{ img.approved_count }}）</td>
+          <td class="mono">{{ img.approved_libs | join(', ') or '无' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="sticky-foot">
+      <button class="btn" type="submit">搜索最少馆组合并出表</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+<script>
+const boxes = document.querySelectorAll('.pic-check');
+const counter = document.getElementById('counter');
+const limit = {{ max_images }};
+function refresh() {
+  const n = document.querySelectorAll('.pic-check:checked').length;
+  counter.textContent = n;
+}
+boxes.forEach(b => b.addEventListener('change', () => {
+  const n = document.querySelectorAll('.pic-check:checked').length;
+  if (n > limit) { b.checked = false; alert('最多只能勾选 ' + limit + ' 张图'); }
+  refresh();
+}));
+document.getElementById('toggleAll')?.addEventListener('click', () => {
+  const anyUnchecked = Array.from(boxes).some(b => !b.checked);
+  boxes.forEach((b, i) => b.checked = anyUnchecked && i < limit);
+  refresh();
+});
+document.getElementById('selForm')?.addEventListener('submit', (e) => {
+  if (!document.querySelector('.pic-check:checked')) {
+    e.preventDefault(); alert('请至少勾选一张图');
+  }
+});
+</script>
+{% endblock %}

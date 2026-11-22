@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>存在缺准用来源的图片 —— 本次不出表</h2>
+  <p class="muted">下列图片在现行台账中没有任何准用（approved）馆。请补正台账后重新搜索；本次不会生成、也不会保存署名表。</p>
+  <table>
+    <thead><tr><th>图像 SHA-256</th><th>摘要</th><th>台账中的来源馆与状态</th></tr></thead>
+    <tbody>
+    {% for h in missing %}
+      <tr>
+        <td class="mono">{{ h }}</td>
+        <td>
+          {% set rows = missing_rows.get(h, []) %}
+          {{ rows | map(attribute='summary') | select | list | last if rows else '—' }}
+        </td>
+        <td>
+          {% if rows %}
+            {% for r in rows %}
+              <span class="badge {{ 'ok' if r.status == 'approved' else 'err' }}">
+                {{ r.library_no }}：{{ '准用' if r.status == 'approved' else '撤回' }}
+              </span>
+            {% endfor %}
+          {% else %}<span class="badge grey">台账无记录</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="toolbar">
+    <a class="btn" href="{{ url_for('index') }}">去上传补正台账</a>
+    <a class="btn secondary" href="{{ url_for('select_images') }}">返回重新选图</a>
+  </div>
+</section>
+{% endblock %}

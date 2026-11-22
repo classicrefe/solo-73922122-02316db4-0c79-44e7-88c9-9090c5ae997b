@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>署名表 #{{ table_id }}（已确认存档）</h2>
+  <p class="muted small">确认时间：{{ confirmed_at | as_dt }}（东八区）</p>
+  <p>
+    共 {{ payload.entries | length }} 张图，存档馆号
+    <span class="lib-tags" style="display:inline">
+      {% for lib in payload.libraries %}<span class="mono">{{ lib }}</span>{% endfor %}
+    </span>
+  </p>
+  {% if report.clean %}
+    <div class="flash success">现行台账核对一致：未发现撤回准用或署名变更。表中保留确认时的原始署名。</div>
+  {% else %}
+    <div class="flash error">
+      核对发现 <strong>{{ report.withdrawn_count }}</strong> 张撤回准用、
+      <strong>{{ report.changed_count }}</strong> 张署名有变（下表已标出）。
+      表内仍保留确认时的原馆号与原署名，现行值在备注列对照显示。
+    </div>
+  {% endif %}
+  <table>
+    <thead>
+      <tr><th>#</th><th>摘要</th><th>图像 SHA-256</th><th>原馆号</th><th>原署名（保留）</th><th>核对</th><th>现行台账对照</th></tr>
+    </thead>
+    <tbody>
+    {% for e in payload.entries %}
+      {% set note = report.annotations[e.image_sha256] %}
+      <tr class="{{ 'row-err' if note.flag == 'withdrawn' else ('row-warn' if note.flag == 'credit_changed' else '') }}">
+        <td>{{ loop.index }}</td>
+        <td>{{ e.summary or '—' }}</td>
+        <td class="mono">{{ e.image_sha256 }}</td>
+        <td class="mono">{{ e.library_no }}</td>
+        <td>{{ e.credit or '—' }}</td>
+        <td>
+          {% if note.flag == 'withdrawn' %}<span class="badge err">撤回准用</span>
+          {% elif note.flag == 'credit_changed' %}<span class="badge warn">署名有变</span>
+          {% else %}<span class="badge ok">一致</span>{% endif %}
+        </td>
+        <td>
+          {% if note.flag == 'withdrawn' %}<span class="muted small">该馆已无有效准用记录</span>
+          {% elif note.flag == 'credit_changed' %}
+            <span class="small">现行署名：<strong>{{ note.current_credit or '—' }}</strong></span>
+          {% else %}<span class="muted small">署名一致</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="toolbar">
+    <a class="btn secondary" href="{{ url_for('tables_index') }}">← 返回列表</a>
+  </div>
+</section>
+{% endblock %}

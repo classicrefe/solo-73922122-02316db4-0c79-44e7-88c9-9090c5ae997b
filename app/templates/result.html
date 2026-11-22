@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>逐图署名表（草稿）</h2>
+  {% if drift is not none %}
+    <div class="flash error">
+      <strong>台账已漂移：</strong>搜索之后台账发生过补正，当前草稿与现行台账不一致。
+      直接确认将被拒绝，请<a href="#diffs">查看差异</a>后放弃草稿并重新搜索。
+    </div>
+  {% endif %}
+  <p>
+    共 {{ result.entries | length }} 张图，使用馆
+    <strong>{{ result.library_count }}</strong> 家（最少馆数解）；
+    并列时已取馆号升序序列字典序最小的组合，一图多馆入选时取最小馆号。
+  </p>
+  <p class="lib-tags">入选馆号：
+    {% for lib in result.libraries %}<span class="mono">{{ lib }}</span>{% endfor %}
+  </p>
+  <p class="muted small">全部候选准用馆（{{ result.eligible | length }} 家）：
+    <span class="mono">{{ result.eligible | join(', ') }}</span></p>
+  <table>
+    <thead><tr><th>#</th><th>摘要</th><th>图像 SHA-256</th><th>馆号</th><th>署名</th></tr></thead>
+    <tbody>
+    {% for e in result.entries %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ e.summary or '—' }}</td>
+        <td class="mono">{{ e.image_sha256 }}</td>
+        <td class="mono"><strong>{{ e.library_no }}</strong></td>
+        <td>{{ e.credit or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if drift is not none %}
+  <h2 id="diffs" style="margin-top:22px">与现行台账的差异</h2>
+  <table>
+    <thead><tr><th>图像 SHA-256</th><th>差异类型</th><th>说明</th></tr></thead>
+    <tbody>
+    {% for d in drift %}
+      <tr class="row-warn">
+        <td class="mono">{{ d.image_sha256 }}</td>
+        <td>
+          {% if d.kind == 'missing' %}<span class="badge err">无准用来源</span>
+          {% elif d.kind == 'library' %}<span class="badge warn">馆号变化</span>
+          {% else %}<span class="badge warn">署名变化</span>{% endif %}
+        </td>
+        <td>{{ d.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="toolbar">
+    <form class="inline" method="post" action="{{ url_for('confirm', token=token) }}">
+      <button class="btn" type="submit" {% if drift is not none %}disabled title="台账已漂移，请重新搜索"{% endif %}>
+        确认并保存（将再次复核现行台账）
+      </button>
+    </form>
+    <form class="inline" method="post" action="{{ url_for('discard_draft', token=token) }}">
+      <button class="btn danger" type="submit">放弃草稿</button>
+    </form>
+    <a class="btn secondary" href="{{ url_for('index') }}">继续补正台账</a>
+  </div>
+  <p class="muted small">确认时若现行台账已不能得出同一份表，系统会拒绝保存并提示重算；草稿保留 24 小时。</p>
+</section>
+{% endblock %}
